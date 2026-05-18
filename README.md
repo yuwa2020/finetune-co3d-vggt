@@ -26,6 +26,9 @@
 
 ## Updates
 
+- [May 18, 2026] Added dataset loaders for **ScanNet++** and **MegaDepth** to the training code (`training/data/datasets/scannetpp.py`, `training/data/datasets/megadepth.py`), along with a multi-dataset example config (`training/config/multidataset_example.yaml`). Training on Co3D + ScanNet++ + MegaDepth simultaneously is now supported. See [`training/README.md`](training/README.md) for details and experimental results.
+
+
 - [May 15, 2026] We fixed an implementation issue that was keeping redundant intermediate tensors in memory. With the same GPU memory budget, VGGT can now run on roughly 2-3x more input frames! See [VGGT-Omega](https://vggt-omega.github.io/) for more details.
 
 
