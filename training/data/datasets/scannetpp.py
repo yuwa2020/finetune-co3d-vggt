@@ -132,76 +132,86 @@ class ScanNetPPDataset(BaseDataset):
         ids: list = None,
         aspect_ratio: float = 1.0,
     ) -> dict:
-        if self.inside_random:
-            seq_index = random.randint(0, self.sequence_list_len - 1)
+        # Retry loop: if a scene has all files missing, pick a different one
+        for _attempt in range(10):
+            if self.inside_random or _attempt > 0:
+                seq_index = random.randint(0, self.sequence_list_len - 1)
 
-        if seq_name is None:
-            seq_name = self.sequence_list[seq_index]
+            _seq_name = (seq_name if seq_name is not None and _attempt == 0
+                         else self.sequence_list[seq_index])
+            frames = self.data_store[_seq_name]
 
-        frames = self.data_store[seq_name]
+            _ids = (ids if ids is not None and _attempt == 0
+                    else np.random.choice(len(frames), img_per_seq, replace=self.allow_duplicate_img))
 
-        if ids is None:
-            ids = np.random.choice(len(frames), img_per_seq, replace=self.allow_duplicate_img)
+            target_image_shape = self.get_target_shape(aspect_ratio)
 
-        target_image_shape = self.get_target_shape(aspect_ratio)
+            images, depths, extrinsics, intrinsics = [], [], [], []
+            cam_points, world_points, point_masks, original_sizes = [], [], [], []
 
-        images, depths, extrinsics, intrinsics = [], [], [], []
-        cam_points, world_points, point_masks, original_sizes = [], [], [], []
-
-        for idx in ids:
-            frame = frames[idx]
-            image = read_image_cv2(frame["img_path"])
-            for _ in range(5):
-                if image is not None:
-                    break
-                frame = random.choice(frames)
+            for idx in _ids:
+                frame = frames[idx]
                 image = read_image_cv2(frame["img_path"])
-            if image is None:
-                if images:
-                    images.append(images[-1])
-                    depths.append(depths[-1])
-                    extrinsics.append(extrinsics[-1])
-                    intrinsics.append(intrinsics[-1])
-                    cam_points.append(cam_points[-1])
-                    world_points.append(world_points[-1])
-                    point_masks.append(point_masks[-1])
-                    original_sizes.append(original_sizes[-1])
-                continue
+                for _ in range(5):
+                    if image is not None:
+                        break
+                    frame = random.choice(frames)
+                    image = read_image_cv2(frame["img_path"])
+                if image is None:
+                    continue  # padded to len(_ids) after loop
 
-            original_size = np.array(image.shape[:2])
-            # Pass zero depth (no depth data available) — zeros = all invalid pixels
-            depth_map = np.zeros(image.shape[:2], dtype=np.float32)
+                original_size = np.array(image.shape[:2])
+                depth_map = np.zeros(image.shape[:2], dtype=np.float32)
 
-            (
-                image, depth_map, extri_opencv, intri_opencv,
-                world_coords_points, cam_coords_points, point_mask, _,
-            ) = self.process_one_image(
-                image, depth_map, frame["extri"], frame["intri"],
-                original_size, target_image_shape, filepath=frame["img_path"],
+                (
+                    image, depth_map, extri_opencv, intri_opencv,
+                    world_coords_points, cam_coords_points, point_mask, _,
+                ) = self.process_one_image(
+                    image, depth_map, frame["extri"], frame["intri"],
+                    original_size, target_image_shape, filepath=frame["img_path"],
+                )
+
+                images.append(image)
+                depths.append(depth_map)
+                extrinsics.append(extri_opencv)
+                intrinsics.append(intri_opencv)
+                cam_points.append(cam_coords_points)
+                world_points.append(world_coords_points)
+                point_masks.append(point_mask)
+                original_sizes.append(original_size)
+
+            # Pad to len(_ids) with last valid frame so all batches have the same shape
+            while 0 < len(images) < len(_ids):
+                images.append(images[-1])
+                depths.append(depths[-1])
+                extrinsics.append(extrinsics[-1])
+                intrinsics.append(intrinsics[-1])
+                cam_points.append(cam_points[-1])
+                world_points.append(world_points[-1])
+                point_masks.append(point_masks[-1])
+                original_sizes.append(original_sizes[-1])
+
+            if len(images) > 0:
+                return {
+                    "seq_name": "scannetpp_" + _seq_name,
+                    "ids": _ids,
+                    "frame_num": len(extrinsics),
+                    "images": images,
+                    "depths": depths,
+                    "extrinsics": extrinsics,
+                    "intrinsics": intrinsics,
+                    "cam_points": cam_points,
+                    "world_points": world_points,
+                    "point_masks": point_masks,
+                    "original_sizes": original_sizes,
+                }
+
+            logging.warning(
+                f"ScanNetPP: all frames missing in scene {_seq_name}, "
+                f"retrying with new scene (attempt {_attempt + 1}/10)"
             )
 
-            images.append(image)
-            depths.append(depth_map)
-            extrinsics.append(extri_opencv)
-            intrinsics.append(intri_opencv)
-            cam_points.append(cam_coords_points)
-            world_points.append(world_coords_points)
-            point_masks.append(point_mask)
-            original_sizes.append(original_size)
-
-        return {
-            "seq_name": "scannetpp_" + seq_name,
-            "ids": ids,
-            "frame_num": len(extrinsics),
-            "images": images,
-            "depths": depths,
-            "extrinsics": extrinsics,
-            "intrinsics": intrinsics,
-            "cam_points": cam_points,
-            "world_points": world_points,
-            "point_masks": point_masks,
-            "original_sizes": original_sizes,
-        }
+        raise RuntimeError("ScanNetPP: failed to load any valid frames after 10 scene attempts")
 
 
 def _quat_trans_to_extri(qw, qx, qy, qz, tx, ty, tz):

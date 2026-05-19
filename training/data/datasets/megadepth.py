@@ -210,16 +210,7 @@ class MegaDepthDataset(BaseDataset):
                     frame = random.choice(frames)
                     image = read_image_cv2(frame["img_path"])
                 if image is None:
-                    if images:
-                        images.append(images[-1])
-                        depths.append(depths[-1])
-                        extrinsics.append(extrinsics[-1])
-                        intrinsics.append(intrinsics[-1])
-                        cam_points.append(cam_points[-1])
-                        world_points.append(world_points[-1])
-                        point_masks.append(point_masks[-1])
-                        original_sizes.append(original_sizes[-1])
-                    continue
+                    continue  # padded to len(_ids) after loop
 
                 depth_map = np.zeros(image.shape[:2], dtype=np.float32)
                 if self.load_depth and HAS_H5PY and frame["depth_path"] is not None:
@@ -251,6 +242,17 @@ class MegaDepthDataset(BaseDataset):
                 world_points.append(world_coords_points)
                 point_masks.append(point_mask)
                 original_sizes.append(original_size)
+
+            # Pad to len(_ids) with last valid frame so all batches have the same shape
+            while 0 < len(images) < len(_ids):
+                images.append(images[-1])
+                depths.append(depths[-1])
+                extrinsics.append(extrinsics[-1])
+                intrinsics.append(intrinsics[-1])
+                cam_points.append(cam_points[-1])
+                world_points.append(world_points[-1])
+                point_masks.append(point_masks[-1])
+                original_sizes.append(original_sizes[-1])
 
             if len(images) > 0:
                 return {
